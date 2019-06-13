@@ -1,49 +1,35 @@
+#include <Ultrasonic.h>
+
 /*
- * Miltiple Ultrasonic Sensors
- * Prints the distance read by many ultrasonic sensors in
- * centimeters and inches. They are supported to four pins
- * ultrasound sensors (liek HC-SC04) and three pins
- * (like PING))) and Seeed Studio sensors).
- *
- * The circuit:
- * * In this circuit there is an ultrasonic module HC-SC04,
- *   PING))) and a Seeed Studio (4 pins, 3 pins, 3 pins,
- *   respectively), attached to digital pins as follows:
- * ---------------------     ---------------------     -------------------
- * | HC-SC04 | Arduino |     | PING))) | Arduino |     | Seeed | Arduino |
- * ---------------------     ---------------------     -------------------
- * |   Vcc   |   5V    |     |   Vcc   |   5V    |     |  Vcc  |   5V    |
- * |   Trig  |   12    | AND |   SIG   |   10    | AND |  SIG  |    8    |
- * |   Echo  |   13    |     |   Gnd   |   GND   |     |  Gnd  |   GND   |
- * |   Gnd   |   GND   |     ---------------------     -------------------
- * ---------------------
- * Note: You do not obligatorily need to use the pins defined above
- * 
- * By default, the distance returned by the read()
- * method is in centimeters. To get the distance in inches,
- * pass INC as a parameter.
- * Example: ultrasonic.read(INC)
- *
- * created 3 Mar 2017
- * by Erick Simões (github: @ErickSimoes | twitter: @AloErickSimoes)
- * modified 11 Jun 2018
- * by Erick Simões (github: @ErickSimoes | twitter: @AloErickSimoes)
- *
- * This example code is released into the MIT License.
+ * ANSCHLUSSBELEGUNG:
+ * GRAUES KABEL OHNE RING:
+ *  br -> VCC
+ *  wh -> GND
+ * GRAUES KABEL MIT RING:
+ *  br -> TOGGLE
+ *  wh -> SENS
  */
 
-#include <Ultrasonic.h>
+//#define DEBUG 1
+
 #define U1LEDPIN A0
 #define U2LEDPIN A1
+#define U1TOGLEPIN 5
+#define U1SENSPIN 6
+#define U2TOGLEPIN 7
+#define U2SENSPIN 8
+
+#define MAXDIST 0.8 //angabge in metern abstand zum sensor in metern
 
 
-#define MAXDIST 0.8 //angabge in metern 
+
+//timeout von schallgeschwindigkeit
 const unsigned long timeout = (unsigned long)((double)MAXDIST / 343.0 * 1000000); // dist / airspeed * ms = timeout [ms]
 
-Ultrasonic ultrasonic1(5, 6);
-Ultrasonic ultrasonic2(7,8);
+Ultrasonic ultrasonic1(U1TOGLEPIN, U1SENSPIN);
+Ultrasonic ultrasonic2(U2TOGLEPIN, U2SENSPIN);
 
-//rolling avg 
+//rolling avg
 float ravg1 = 0;
 float ravg2 = 0;
 
@@ -55,53 +41,82 @@ void setup() {
   digitalWrite(U2LEDPIN, HIGH);
   
   Serial.begin(115200);
-  
+
+  #ifdef DEBUG
   Serial.print(timeout);
-  delay(2000);
+  #endif
+    
   ultrasonic1.setTimeout(timeout);
   ultrasonic2.setTimeout(timeout);
+
+
+  delay(2000);
+
+  //quick calibration ...
+  const int quickCalibrationCount = 10;
+  unsigned long u1=0,u2=0;
+  for(int co=0;co < quickCalibrationCount;co++) {
+    delay(5);
+    u1 += ultrasonic1.read();
+    delay(5);
+    u2 += ultrasonic2.read();    
+  }
+  u1 /= quickCalibrationCount;
+  u2 /= quickCalibrationCount;
+
+  ravg1 = u1;
+  ravg2 = u2;
 }
 
 
 
 void loop() {
-  unsigned long u1=0,u2=0;
-  
-  //for(int co=0;co < 3;co++) {
-    delay(5);
-    u1 = ultrasonic1.read();
-    delay(5);
-    u2 = ultrasonic2.read();    
-  //}
-  //u1 /= 3;
-  //u2 /= 3;
-  
+  unsigned long u1=0,u2=0; //todo move to int
+  static unsigned long coolDown1 = 0,coolDown2 = 0,lastRun = 0;
+  const unsigned long coolDownTimeMS = 500;
 
+
+  if((millis() - lastRun) < 100) return;  
+  lastRun = millis();
+  
+  //-- read
+  delay(5);
+  u1 = ultrasonic1.read();
+  delay(5);
+  u2 = ultrasonic2.read();
+  //-- end read
   
   const unsigned int ravgCount = 100;
-  ravg1 = (((ravg1 * ravgCount) + u1) / (ravgCount + 1));
-  ravg2 = (((ravg2 * ravgCount) + u2) / (ravgCount + 1));
+  const unsigned int threshold = 10;
+  float delta1 = (ravg1 - u1);
+  float delta2 = (ravg2 - u2);
 
-  float delta1 = abs(ravg1 - u1);
-  float delta2 = abs(ravg2 - u2);
-
-  if(delta1 > 10) {
+  //TODO: move code to function,data to struct.
+  //channel 1
+  if(delta1 > threshold) {
     digitalWrite(U1LEDPIN, HIGH);
+    if((millis() - coolDown1) > coolDownTimeMS) {
+      Serial.print("TRIGER1\n"); //send signal to brian
+    }
+    coolDown1 = millis();
   } else {
+    ravg1 = (((ravg1 * ravgCount) + u1) / (ravgCount + 1));
     digitalWrite(U1LEDPIN, LOW);
   }
 
-  if(delta2 > 10) {
+  //channel2
+  if(delta2 > threshold) {
     digitalWrite(U2LEDPIN, HIGH);
+    if((millis() - coolDown2) > coolDownTimeMS) {
+      Serial.print("TRIGER2\n"); //send signal to brian
+    }
+    coolDown2 = millis();
   } else {
+    ravg2 = (((ravg2 * ravgCount) + u2) / (ravgCount + 1));
     digitalWrite(U2LEDPIN, LOW);
   }
 
-
-
-
-
-  Serial.print("MAX: ");
+#ifdef DEBUG
   Serial.print(u1);Serial.print(",");
   Serial.print(u2);Serial.print(",");
   Serial.print(ravg1);Serial.print(",");
@@ -109,5 +124,6 @@ void loop() {
   Serial.print(delta1);Serial.print(",");
   Serial.print(delta2);//Serial.print(",");
   Serial.print('\n');
-  delay(100);
+#endif
+  //delay(100); //wenn delay angepasst wird auch ravgCount neu berechnen !!!
 }
